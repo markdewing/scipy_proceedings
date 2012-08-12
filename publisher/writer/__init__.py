@@ -10,7 +10,9 @@ from docutils.writers.latex2e import (Writer, LaTeXTranslator,
 from rstmath import mathEnv
 import code_block
 
-from options import options
+from options import options, inst_table
+
+from collections import OrderedDict
 
 PreambleCmds.float_settings = '''
 \\usepackage[font={small,it},labelfont=bf]{caption}
@@ -21,18 +23,20 @@ class Translator(LaTeXTranslator):
     def __init__(self, *args, **kwargs):
         LaTeXTranslator.__init__(self, *args, **kwargs)
 
-    # Handle author declarations
+        # Handle author declarations
 
-    current_field = ''
+        self.current_field = ''
 
-    author_names = []
-    author_institutions = []
-    author_emails = []
-    paper_title = ''
-    table_caption = []
+        self.author_names = []
+        self.author_institutions = []
+        self.author_emails = []
+        self.paper_title = ''
+        self.abstract_text = []
+        self.keywords = ''
+        self.table_caption = []
 
-    abstract_in_progress = False
-    non_breaking_paragraph = False
+        self.abstract_in_progress = False
+        self.non_breaking_paragraph = False
 
     def visit_docinfo(self, node):
         pass
@@ -75,33 +79,110 @@ class Translator(LaTeXTranslator):
     def depart_document(self, node):
         LaTeXTranslator.depart_document(self, node)
 
+        ## Generate footmarks
+
+        # build map: institution -> (author1, author2)
+        institution_authors = OrderedDict()
+        for auth, inst in zip(self.author_names, self.author_institutions):
+            institution_authors.setdefault(inst, []).append(auth)
+
+        def footmark(n):
+            """Insert footmark #n.  Footmark 1 is reserved for
+            the corresponding author.\
+            """
+            return ('\\setcounter{footnotecounter}{%d}' % n,
+                    '\\fnsymbol{footnotecounter}')
+
+        # Build one footmark for each institution
+        institute_footmark = {}
+        for i, inst in enumerate(institution_authors):
+            institute_footmark[inst] = footmark(i + 2)
+
+        footmark_template = r'\thanks{%(footmark)s %(instutions)}'
+        corresponding_auth_template = r'''%%
+          %(footmark_counter)s\thanks{%(footmark)s %%
+          Corresponding author: \protect\href{mailto:%(email)s}{%(email)s}}'''
+
         title = self.paper_title
-        authors = ', '.join(self.author_names)
+        authors = []
+        institutions_mentioned = set()
+        for n, (auth, inst) in enumerate(zip(self.author_names,
+                                             self.author_institutions)):
+            # Corresponding author
+            if n == 0:
+                authors += [r'%(author)s$^{%(footmark)s}$' % \
+                            {'author': auth,
+                             'footmark': ''.join(footmark(1)) + ''.join(institute_footmark[inst])}]
 
-        author_notes = ['''
-The corresponding author is with %s, e-mail: \protect\href{%s}{%s}.
-        ''' % (self.author_institutions[0], 'mailto:' + self.author_emails[0],
-       self.author_emails[0])]
+                fm_counter, fm = footmark(1)
+                authors[-1] += corresponding_auth_template % \
+                               {'footmark_counter': fm_counter,
+                                'footmark': fm,
+                                'email': self.author_emails[0]}
 
-        author_notes = ''.join('\\thanks{%s}' % n for n in author_notes)
+            else:
+                authors += [r'%(author)s$^{%(footmark)s}$' %
+                            {'author': auth,
+                             'footmark': ''.join(institute_footmark[inst])}]
 
-        title_template = '\\title{%s}\\author{%s%s}\\maketitle'
-        title_template = title_template % (title,
-                                           authors,
-                                           author_notes)
+            if not inst in institutions_mentioned:
+                fm_counter, fm = institute_footmark[inst]
+                authors[-1] += r'%(footmark_counter)s\thanks{%(footmark)s %(institution)s}' % \
+                               {'footmark_counter': fm_counter,
+                                'footmark': fm,
+                                'institution': inst}
+
+            institutions_mentioned.add(inst)
+
+
+        ## Add copyright
+
+        copyright_holder = self.author_names[0] + ('.' if len(self.author_names) == 1 else ' et al.')
+        author_notes = r'''%%
+
+          \noindent%%
+          Copyright\,\copyright\,%(year)s %(copyright_holder)s %(copyright)s%%
+        ''' % \
+        {'email': self.author_emails[0],
+         'year': options['proceedings']['year'],
+         'copyright_holder': copyright_holder,
+         'copyright': options['proceedings']['copyright']['article']}
+
+        authors[-1] += r'\thanks{%s}' % author_notes
+
+
+        ## Set up title and page headers
+
+        title_template = r'\newcounter{footnotecounter}' \
+                         r'\title{%s}\author{%s}\maketitle'
+        title_template = title_template % (title, ', '.join(authors))
 
         marks = r'''
-        \renewcommand{\leftmark}{%s}
-        \renewcommand{\rightmark}{%s}
-        ''' % (options['proceedings_title'], title.upper())
+          \renewcommand{\leftmark}{%s}
+          \renewcommand{\rightmark}{%s}
+        ''' % (options['proceedings']['title']['short'], title.upper())
         title_template += marks
 
         self.body_pre_docinfo = [title_template]
+
+        # Save paper stats
+        self.document.stats = {'title': title,
+                               'authors': ', '.join(self.author_names),
+                               'author': self.author_names,
+                               'author_email': self.author_emails,
+                               'author_institution': self.author_institutions,
+                               'abstract': self.abstract_text,
+                               'keywords': self.keywords,
+                               'copyright_holder': copyright_holder}
+
 
     def end_open_abstract(self, node):
         if 'abstract' not in node['classes'] and self.abstract_in_progress:
             self.out.append('\\end{abstract}')
             self.abstract_in_progress = False
+        elif self.abstract_in_progress:
+            self.abstract_text.append(self.encode(node.astext()))
+
 
     def visit_title(self, node):
         self.end_open_abstract(node)
@@ -126,10 +207,12 @@ The corresponding author is with %s, e-mail: \protect\href{%s}{%s}.
 
         if 'abstract' in node['classes'] and not self.abstract_in_progress:
             self.out.append('\\begin{abstract}')
+            self.abstract_text.append(self.encode(node.astext()))
             self.abstract_in_progress = True
 
         elif 'keywords' in node['classes']:
             self.out.append('\\begin{IEEEkeywords}')
+            self.keywords = self.encode(node.astext())
 
         elif self.non_breaking_paragraph:
             self.non_breaking_paragraph = False
@@ -224,6 +307,15 @@ The corresponding author is with %s, e-mail: \protect\href{%s}{%s}.
 
     def depart_literal_block(self, node):
         LaTeXTranslator.depart_literal_block(self, node)
+
+
+    def visit_block_quote(self, node):
+        self.out.append('\\begin{quotation}')
+        LaTeXTranslator.visit_block_quote(self, node)
+
+    def depart_block_quote(self, node):
+        LaTeXTranslator.depart_block_quote(self, node)
+        self.out.append('\\end{quotation}')
 
 
     # Math directives from rstex

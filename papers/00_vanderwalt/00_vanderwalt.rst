@@ -1,10 +1,15 @@
 :author: Gaius Caesar
 :email: jj@rome.it
-:institution: Senate House
+:institution: Senate House, S.P.Q.R.
 
 :author: Mark Anthony
 :email: mark37@rome.it
-:institution: Egyptian Embassy
+:institution: Egyptian Embassy, S.P.Q.R.
+
+:author: Jarrod Millman
+:email: millman@rome.it
+:institution: Egyptian Embassy, S.P.Q.R.
+
 
 ------------------------------------------------
 A Numerical Perspective to Terraforming a Desert
@@ -94,6 +99,15 @@ equation on a separate line:
 
    g(x) = \int_0^\infty f(x) dx
 
+or on multiple, aligned lines:
+
+.. math::
+   :type: eqnarray
+
+   g(x) &=& \int_0^\infty f(x) dx \\
+        &=& \ldots
+
+
 The area of a circle and volume of a sphere are given as
 
 .. math::
@@ -152,6 +166,11 @@ figures.
 
 We show the different quantities of materials required in Table
 :ref:`mtable`.
+
+Perhaps we want to end off with a quote by Lao Tse:
+
+  *Muddy water, let stand, becomes clear.*
+
 
 .. Customised LaTeX packages
 .. -------------------------
